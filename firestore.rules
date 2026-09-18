@@ -1,0 +1,67 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.admin == true;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Profil user: pemilik boleh baca datanya sendiri, admin boleh baca semua.
+    // Field sensitif (balance, banned) hanya boleh diubah lewat server (Admin SDK),
+    // jadi write langsung dari client ditutup kecuali membuat dokumen dirinya sendiri
+    // saat pertama kali daftar/login.
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create: if isOwner(uid)
+                    && request.resource.data.uid == uid
+                    && request.resource.data.balance == 0
+                    && request.resource.data.banned == false;
+      allow update, delete: if isAdmin();
+    }
+
+    // Layanan publik: siapa saja yang login boleh melihat (untuk memesan),
+    // hanya admin yang boleh menulis. Harga modal/margin TIDAK di sini,
+    // melainkan di productCosts (lihat di bawah).
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Data rahasia harga modal & margin — HANYA admin yang boleh baca/tulis.
+    match /productCosts/{productId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Order: user hanya boleh baca order miliknya sendiri & membuat order baru
+    // (perubahan saldo/kalkulasi tetap divalidasi ulang oleh Cloud Function/API
+    // server, bukan dipercaya mentah-mentah dari client).
+    // Status hanya boleh diubah oleh admin lewat server.
+    match /orders/{orderId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Deposit: hanya bisa dibuat & dibaca lewat server (Admin SDK) supaya
+    // saldo tidak bisa dimanipulasi langsung dari client.
+    match /deposits/{depositId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow write: if isAdmin();
+    }
+
+    // Config (maintenance mode, margin default): dibaca semua orang
+    // (untuk menampilkan halaman maintenance), hanya admin yang menulis.
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}
